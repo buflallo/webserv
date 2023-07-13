@@ -38,28 +38,30 @@ int reader(unsigned char *buffer, Socket &client)
     return true;
 }
 
-void initializeRequest(Socket & client)
+void initializeRequest(std::pair <Socket, Server> & client, std::vector<Server> & servers)
 {
+    // sleep(1000);
+
     try
     {
-        std::cout << "initializeRequest" << std::endl;
-        Request req(client.getrequest());
-        client.setReq(req);
+        Request req(client, servers);
+        client.first.setReq(req);
     }
     catch(const std::exception& e)
     {
         std::cerr << e.what() << '\n';
         // basic header error handling
         // set the error status to handle the response later on prepare response
-        client.get_Resp().setStatusCode(atoi(e.what()));
-        client.setread_done(1);
+        client.first.get_Resp().generateErrorPage(atoi(e.what()), Location());
+        client.first.get_Resp().setStatusCode(atoi(e.what()));
+        client.first.setread_done(1);
     }
 }
 
-void MultiPlexing::handleReadData(std::pair <Socket, Server> & client)
+void MultiPlexing::handleReadData(std::pair <Socket, Server> & client, std::vector<Server> & servers)
 {
     unsigned char buffer[1000];
-    int rc = 0;
+
     std::vector<unsigned char> pattern;
     pattern.clear();
     pattern.push_back('0');
@@ -71,26 +73,23 @@ void MultiPlexing::handleReadData(std::pair <Socket, Server> & client)
     if (!reader(buffer, client.first))
         return ;
     //search for the end of the header
-/*1*/std::vector<unsigned char>::iterator pos = std::search(client.first.getrequest().begin(), client.first.getrequest().end(), pattern.begin()+1, pattern.end());
+    std::vector<unsigned char>::iterator pos = std::search(client.first.getrequest().begin(), client.first.getrequest().end(), pattern.begin()+1, pattern.end());
 
     if (pos != client.first.getrequest().end())
     {
         if (!client.first.getReq().getHeaders().empty())
-            // get the body
             client.first.getReq().setBody(std::vector<unsigned char>(pos + 4, client.first.getrequest().end()));
-            //----can be optimized 1 & 2 & 3
         else
-        // if the header not inizialized yet
-            initializeRequest(client.first);
+            initializeRequest(client, servers);
 
         // perhaps the body is in the first chunk so we check if the body is complete, also if it another chunk we perform the same check
         if (!client.first.getReq().getHeaders().empty() && client.first.getReq().getHeaders().find("Content-Length") != client.first.getReq().getHeaders().end())
         {
             // check if the body exceed the max length in the server...
 
-            if (client.first.getReq().getBody().size() >= stoi(client.first.getReq().getHeaders().find("Content-Length")->second))
+            if (client.first.getReq().getBody().size() >= strtoul(client.first.getReq().getHeaders().find("Content-Length")->second.c_str(), NULL, 10))
             {
-                if (client.first.getReq().getBody().size() > stoi(client.first.getReq().getHeaders().find("Content-Length")->second))
+                if (client.first.getReq().getBody().size() > strtoul(client.first.getReq().getHeaders().find("Content-Length")->second.c_str(), NULL, 10))
                     client.first.get_Resp().setResp(std::make_pair("HTTP/1.1 404 Bad Request\r\n\r\n", 32));
                 client.first.setread_done(1);
             }
@@ -103,14 +102,12 @@ void MultiPlexing::handleReadData(std::pair <Socket, Server> & client)
 
         if (!client.first.getReq().getHeaders().empty() && client.first.getReq().getHeaders().find("Transfer-Encoding") != client.first.getReq().getHeaders().end())
         {
-            std::cout << "again" << std::endl;
             if ((pos = std::search(client.first.getrequest().begin(), client.first.getrequest().end(), pattern.begin(), pattern.end()) ) != client.first.getrequest().end())
             {
                 if (pos + 5 != client.first.getrequest().end())
                 {
                     client.first.get_Resp().setResp(std::make_pair("HTTP/1.1 404 Bad Request\r\n\r\n", 32));
                 }
-                std::cout << "here6" << std::endl;
                 client.first.getReq().parseChunkedBody(client.first.getReq().getBody());
                 client.first.setread_done(1);
             }
@@ -136,16 +133,18 @@ void MultiPlexing::handleWriteData(Socket &sock)
     // Get the appropriate response data to send back to the client
     char buffer[1025];
     bzero(buffer, 1025);
-    int rc ;
-    
+    int rc = 0;
     sock.getReq().setStarted(time(NULL));
     sock.setWrite_done(0);
     if (!sock.get_Resp().getIsOpen())
     {
+        if (sock.getReq().getConn())
+            sock.get_Resp().setHeader("Connection", "Keep-Alive");
+        else
+            sock.get_Resp().setHeader("Connection", "close");
         rc = write(sock.getSocket_fd() , sock.get_Resp().toString().c_str(), sock.get_Resp().toString().length());
         if (sock.get_Resp().getFile() != "")
         {
-            std::cout << "file " << sock.get_Resp().getFile() << " opened" << std::endl;
             sock.get_Resp().setFd(open(sock.get_Resp().getFile().c_str(), O_RDONLY));
             if (sock.get_Resp().getFd() < 0)
             {
@@ -157,15 +156,18 @@ void MultiPlexing::handleWriteData(Socket &sock)
         }
         else
             sock.setWrite_done(1);
-        return ;
     }
-    if ((sock.get_Resp().getOffset() + 1024) > stoi(sock.get_Resp().getHeaders().find("Content-Length")->second) && sock.get_Resp().getFile() != "")
+    else if ((sock.get_Resp().getOffset() + 1024) > strtoul(sock.get_Resp().getHeaders().find("Content-Length")->second.c_str(), NULL, 10) && sock.get_Resp().getFile() != "")
     {
         read(sock.get_Resp().getFd(), buffer, stoi(sock.get_Resp().getHeaders().find("Content-Length")->second) - sock.get_Resp().getOffset());
         rc = write(sock.getSocket_fd() , buffer , stoi(sock.get_Resp().getHeaders().find("Content-Length")->second) - sock.get_Resp().getOffset());
         sock.get_Resp().setOffset(sock.get_Resp().getOffset() + rc);
-        std::cout << GREEN << "file " << sock.get_Resp().getFile() << " done" << std::endl;
         sock.setWrite_done(1);
+        if (sock.get_Resp().getFd() > 0)
+        {
+            if (close(sock.get_Resp().getFd()) != 0)
+                perror("close");
+        }
     }
     else if (sock.get_Resp().getFile() != "")
     {
@@ -173,21 +175,24 @@ void MultiPlexing::handleWriteData(Socket &sock)
         rc = write(sock.getSocket_fd() , buffer, 1024);
         sock.get_Resp().setOffset(sock.get_Resp().getOffset() + rc);
     }
-    if (rc < 0)
+    if (rc <= 0)
     {
-        perror("  write() failed");
+        std::cerr << "Error writing to client socket" << std::endl;
         sock.setWrite_done(1);
     }
 }
 
 
 
-void MultiPlexing::setup_server(std::vector<Server>& servers)
+void MultiPlexing::setup_server(Servers & servers)
 {
     int rc;
     Clients clients;
 
-    CreateServerSockets(servers);
+    for (Servers::iterator it = servers.begin(); it != servers.end(); it++) {
+        CreateServerSockets((it->second)[0]);
+    }
+
     while (1)
     {
         struct timeval timeout;
@@ -196,70 +201,56 @@ void MultiPlexing::setup_server(std::vector<Server>& servers)
         memcpy(&io.read_cpy, &io.readfds, sizeof(io.readfds));
         memcpy(&io.write_cpy, &io.writefds, sizeof(io.writefds));
 
-        if ((rc = select(max_sd + 1, &io.read_cpy, &io.write_cpy, NULL, &timeout)) < 0)
-        {
+        if ((rc = select(max_sd + 1, &io.read_cpy, &io.write_cpy, NULL, &timeout)) < 0) {
             perror("select() failed");
             exit(EXIT_FAILURE);
         }
         if (rc == 0)
         {
-            for (int i = 0; i < clients.size(); i++)
+            for (size_t i = 0; i < clients.size(); i++)
             {
-                std::cout << clients[i].first.getReq().getConn() << " " << clients[i].first.getReq().getTimeOut() << " " << time(NULL) - clients[i].first.getReq().getStarted() << std::endl;
                 if ((clients[i].first.getClose_conn() || !clients[i].first.getReq().getConn() || (clients[i].first.getReq().getConn() &&
-                (time(NULL) - clients[i].first.getReq().getStarted() >= clients[i].first.getReq().getTimeOut()))))
-                {
-                    std::cout << "clian sala mn read" << std::endl;
+                (time(NULL) - clients[i].first.getReq().getStarted() >= clients[i].first.getReq().getTimeOut())))) {
                     // remove the socket fd from the sets : handle error "bad file descriptor"
                     FD_CLR(clients[i].first.getSocket_fd(), &io.writefds);
                     FD_CLR(clients[i].first.getSocket_fd(), &io.readfds);
-                    std::cout << RED << "close socket" << clients[i].first.getSocket_fd() << std::endl;
                     close(clients[i].first.getSocket_fd());
                     clients[i].first.clear();
                     clients.erase(clients.begin() + i);
                     i--;
                 }
             }
-            printf("select() == %d timed out.  End program.\n", rc);
+            std::cout << YELLOW << "++++++++++++++ waiting for new connection +++++++++++++++" << std::endl;
             continue;
         }
+        // close the connection if the client is not responding
         // Check for new connections
-        for (int j = 0; j < servers.size(); j++)
-        {
-            if (FD_ISSET(servers[j].getServerFd(), &io.read_cpy))
-                handleNewConnection(servers[j], clients);
+        for (Servers::iterator it = servers.begin(); it != servers.end(); it++) {
+            if (FD_ISSET((it->second)[0].getServerFd(), &io.read_cpy))
+                handleNewConnection((it->second)[0], clients);
         }
         // Handle client I/O
-        for (int i = 0; i < clients.size(); i++)
+        for (size_t i = 0; i < clients.size(); i++)
         {
-            if (FD_ISSET(clients[i].first.getSocket_fd(), &io.read_cpy))
-            {
-                handleReadData(clients[i]);
-                if (!clients[i].first.getClose_conn() && clients[i].first.getread_done())
-                {
+            if (FD_ISSET(clients[i].first.getSocket_fd(), &io.read_cpy)) {
+                handleReadData(clients[i], servers[clients[i].second.getPort()]);
+                if (!clients[i].first.getClose_conn() && clients[i].first.getread_done()) {
                     clients[i].first.getrequest().clear();
                     FD_SET(clients[i].first.getSocket_fd(), &io.writefds);
                 }
             }
 
-            if (FD_ISSET(clients[i].first.getSocket_fd(), &io.write_cpy))
-            {
-                clients[i].first.get_Resp().prepare_response(clients[i].first.getReq(), clients[i].second);
+            if (FD_ISSET(clients[i].first.getSocket_fd(), &io.write_cpy)) {
+                if (clients[i].first.get_Resp().getStatusCode() == 0)
+                    clients[i].first.get_Resp().prepare_response(clients[i].first.getReq(), clients[i].second);
                 handleWriteData(clients[i].first);
-                if (clients[i].first.getWrite_done())
-                {
+                if (clients[i].first.getWrite_done()) {
                     clients[i].first.setWrite_done(0);
                     FD_CLR(clients[i].first.getSocket_fd(), &io.writefds);
-                    // FD_CLR(clients[i].first.getSocket_fd(), &io.readfds);
-                    // close(clients[i].first.getSocket_fd());
-                    if (clients[i].first.get_Resp().getFile() != "")
-                        close(clients[i].first.get_Resp().getFd());
                     clients[i].first.clear();
-                    // clients.erase(clients.begin() + i);
                 }
             }
-            if (clients[i].first.getClose_conn())
-            {
+            if (clients[i].first.getClose_conn()) {
                 FD_CLR(clients[i].first.getSocket_fd(), &io.readfds);
                 FD_CLR(clients[i].first.getSocket_fd(), &io.writefds);
                 close(clients[i].first.getSocket_fd());
@@ -278,47 +269,35 @@ void    MultiPlexing::handleNewConnection(Server & server, Clients & clients)
     int new_socket;
     struct sockaddr_in address = server.getServerSocket().getAddress();
     int addrlen = sizeof(address);
-
     if ((new_socket = accept(server.getServerFd(), (struct sockaddr *)& address, (socklen_t*)&addrlen))<0)
     {
-        if (errno != EWOULDBLOCK)
-        {
+        if (errno != EWOULDBLOCK) {
             perror("  accept() failed");
             server.setEndServer(1);
         }
     }
-    if ((fcntl(new_socket, F_SETFL, O_NONBLOCK)) <  0)
-    {
+    std::cout << GREEN << "++++++++++++++ connection aceepeted " << new_socket << " on : " << server.getPort()  << " ++++++++++++++" << std::endl;
+    if ((fcntl(new_socket, F_SETFL, O_NONBLOCK)) <  0) {
         perror("In fcntl");
         exit(EXIT_FAILURE);
     }
-    std::cout << "New connection , socket fd is " << new_socket << " , ip is : " << inet_ntoa(address.sin_addr) << " , port : " << ntohs(address.sin_port) << std::endl;
     FD_SET(new_socket, &io.readfds);
     if (new_socket > max_sd)
         max_sd = new_socket;
     clients.push_back(std::make_pair(Socket(new_socket, address), server));
     clients.back().first.clear();
+    usleep(500);
 }
 
-void    MultiPlexing::CreateServerSockets(std::vector<Server>& servers)
+void    MultiPlexing::CreateServerSockets(Server& server)
 {
     Socket sock;
 
-    for (int i = 0; i < servers.size(); i++)
-    {
-        sock = servers[i].getServerSocket();
-        sock.create_sockets(servers[i].getPort());
-        if (sock.getAlready_bind())
-        {
-            sock.setAlreadyBind(0);
-            servers.erase(servers.begin() + i);
-            i--;
-            continue;
-        }
-        servers[i].setServerSocket(sock);
-        max_sd = servers[i].getServerFd();
-        FD_SET(servers[i].getServerFd(), &io.readfds);
-    }
+    sock = server.getServerSocket();
+    sock.create_sockets(server.getPort());
+    server.setServerSocket(sock);
+    max_sd = server.getServerFd();
+    FD_SET(server.getServerFd(), &io.readfds);
 }
 
 int MultiPlexing::getMaxSd()

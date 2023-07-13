@@ -33,27 +33,36 @@ class Location
         std::string                                         _locationNumber;
         std::string                                         _locationPath;
         std::vector<std::string>                            _allowedMethods;
+        std::vector<std::pair<int, std::string> >           _error_pages;
         std::string                                         _root;
         std::vector<std::string>                            _index;
         bool                                                _autoIndex;
         size_t                                              _clientMaxBodySize;
-        std::string                                         _uploadPath;
+        bool                                                _uploadPath;
+        std::vector< Cgi >                                  _cgi;
         std::pair<std::string, std::string>                 _redirection;
+        int     a;
 
     public:
         Location();
+        Location(int a) : a(a) {};
         ~Location();
+        Location &operator=(const Location &location);
 
         std::string                                         & getLocationNumber();
         std::string                                         & getLocationPath();
         std::vector<std::string>                            & getAllowedMethods();
-        
+        void                                                setError_pages(std::vector<std::pair<int, std::string> > error_pages);
+        int                                                 & get_a(){return a;};
         std::string                                         & getRoot();
+        std::vector<std::pair<int, std::string> >           getError_pages() const;
         std::vector<std::string>                            & getIndex();
         bool                                                & getAutoIndex();
-        std::string                                         & getUploadPath();
+        bool                                                & getUploadPath();
         std::pair<std::string, std::string>                 & getRedirection();
         size_t                                              & getClientMaxBodySize();
+        void                                                set_cgi(std::vector< Cgi > cgi);
+        std::vector< Cgi > &                                get_cgi();
 
         void                                                setLocationNumber(std::string locationNumber);
         void                                                setLocationPath(std::string locationPath);
@@ -61,11 +70,12 @@ class Location
         void                                                setRoot(std::string root);
         void                                                setIndex(std::vector<std::string> index);
         void                                                setAutoIndex(bool autoIndex);
-        void                                                setUploadPath(std::string uploadPath);
+        void                                                setUploadPath(bool uploadPath);
         void                                                setRedirection(std::pair<std::string, std::string> redirection);
         void                                                setClientMaxBodySize(size_t clientMaxBodySize);
 
-        void                                                print_location(){
+        void                                                print_location()
+        {
             std::cout << "locationNumber : " << _locationNumber << std::endl;
             std::cout << "locationPath : " << _locationPath << std::endl;
             std::cout << "allowedMethods : ";
@@ -78,6 +88,16 @@ class Location
                 std::cout << _index[i] << " ";
             std::cout << std::endl;
             std::cout << "autoIndex : " << _autoIndex << std::endl;
+            std::cout << "error_pages : ";
+            for (size_t i = 0; i < _error_pages.size(); i++)
+                std::cout << _error_pages[i].first << " " << _error_pages[i].second << " ";
+            std::cout << std::endl;
+            std::cout << "cgi : ";
+            for (size_t i = 0; i < _cgi.size(); i++)
+            {
+                std::cout << _cgi[i].get_Cgi().first << " ";
+                std::cout << _cgi[i].get_Cgi().second << std::endl;
+            }
             std::cout << "uploadPath : " << _uploadPath << std::endl;
             // std::cout << std::endl;
             std::cout << "redirection : " << _redirection.first << " " << _redirection.second << std::endl;
@@ -95,16 +115,14 @@ class Server
         fd_set write_cpy;
         fd_set write_fds;
         size_t _port;
-        std::string _host;
+        bool _default;
+        std::string _ip;
 
         std::vector<std::string> _serverNames;
         std::vector<Location> _locations;
-        std::vector<std::pair<size_t, std::string> > _error_pages;
-        std::string _root;
-        std::vector<std::string> _index;
+        Location              l_default;
         int max_sd;
         int end_server;
-        Cgi  _cgi;
         
     public:
         Server();
@@ -113,22 +131,22 @@ class Server
         fd_set& getMasterSet();
         fd_set& getWriteFds();
         fd_set& getWriteCpy();
+        Location & getDefaultLocation();
+        void setDefaultLocation(Location & l_default);
         fd_set& getWorkingSet();
         Socket & getServerSocket();
-        Cgi & get_cgi();
+        void   setDefault(bool Default);
+        bool   & getDefault();
 
         int getEndServer();
         size_t & getPort();
         std::vector<std::string> & getServerNames();
         std::vector<Location> & getLocations();
-        std::string & getHost();
-        std::vector<std::pair<size_t, std::string> > & getError_pages();
+        std::string & getIp();
         int getServerFd();
-        std::string & getRoot();
-        std::vector<std::string>    & getIndex();
         int getMaxSd();
 
-        void    set_cgi(Cgi cgi);
+        
         void    setEndServer(int end_server);
         void    setServerSocket(Socket & sock);
         void    setMaxSd(int sd);
@@ -136,25 +154,19 @@ class Server
         void    setPort(size_t port);
         void    setServerNames(std::vector<std::string> serverNames);
         void    setLocations(std::vector<Location> locations);
-        void    setHost(std::string host);
-        void    setRoot(std::string root);
-        void    setIndex(std::vector<std::string> index);
-        void    setError_pages(std::vector<std::pair<size_t, std::string> > error_pages);
+        void    setIp(std::string ip);
         void    print_server(){
             std::cout << "port : " << _port << std::endl;
-            std::cout << "host : " << _host << std::endl;
-            std::cout << "root : " << _root << std::endl;
+            std::cout << "ip : " << _ip << std::endl;
+            std::cout << "root : " << l_default.getRoot() << std::endl;
             std::cout << "index : ";
-            for (size_t i = 0; i < _index.size(); i++)
-                std::cout << _index[i] << " ";
+            for (size_t i = 0; i < l_default.getIndex().size(); i++)
+                std::cout << l_default.getIndex()[i] << " ";
             std::cout << std::endl;
             std::cout << "serverNames : ";
             for (size_t i = 0; i < _serverNames.size(); i++)
                 std::cout << _serverNames[i] << " ";
             std::cout << std::endl;
-            std::cout << "cgi : ";
-            std::cout << _cgi.get_Cgi().first << " ";
-            std::cout << _cgi.get_Cgi().second << std::endl;
             std::cout << "locations : " << std::endl;
             for (size_t i = 0; i < _locations.size(); i++)
             {
@@ -162,9 +174,6 @@ class Server
                 _locations[i].print_location();
             }
             std::cout << std::endl;
-            std::cout << "error_pages : ";
-            for (size_t i = 0; i < _error_pages.size(); i++)
-                std::cout << _error_pages[i].first << " " << _error_pages[i].second << " ";
-            std::cout << std::endl;
+            
         }
 };

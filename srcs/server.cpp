@@ -7,15 +7,12 @@ Server::Server()
     FD_ZERO(&working_set);
     FD_ZERO(&write_fds);
     _port = 0;
-    _host = "";
+    _ip = "";
     _serverNames.clear();
     _locations.clear();
-    _error_pages.clear();
-    _index.clear();
-    _root = "";
+    _default = false;
     end_server = 0;
     max_sd = 0;
-    _cgi.clear();
 }
 
 Server::~Server()
@@ -108,12 +105,12 @@ size_t &Location::getClientMaxBodySize()
     return this->_clientMaxBodySize;
 }
 
-std::string &Server::getHost()
+std::string &Server::getIp()
 {
-    return this->_host;
+    return this->_ip;
 }
 
-std::vector<std::pair<size_t, std::string> > &Server::getError_pages()
+std::vector<std::pair<int, std::string> > Location::getError_pages() const
 {
     return this->_error_pages;
 }
@@ -121,6 +118,20 @@ std::vector<std::pair<size_t, std::string> > &Server::getError_pages()
 void Server::setPort(size_t port)
 {
     this->_port = port;
+}
+
+void Location::set_cgi(std::vector< Cgi >  cgi)
+{
+    this->_cgi = cgi;
+}
+
+void Server::setDefault(bool Default){
+    this->_default = Default;
+}
+
+bool &Server::getDefault()
+{
+    return this->_default;
 }
 
 void Server::setServerNames(std::vector<std::string> serverNames)
@@ -133,9 +144,9 @@ void Server::setLocations(std::vector<Location> locations)
     this->_locations = locations;
 }
 
-void Server::setHost(std::string host)
+void Server::setIp(std::string ip)
 {
-    this->_host = host;
+    this->_ip = ip;
 }
 
 void Location::setClientMaxBodySize(size_t clientMaxBodySize)
@@ -143,32 +154,41 @@ void Location::setClientMaxBodySize(size_t clientMaxBodySize)
     this->_clientMaxBodySize = clientMaxBodySize;
 }
 
-void Server::setError_pages(std::vector<std::pair<size_t, std::string> > error_pages)
+void Location::setError_pages(std::vector<std::pair<int, std::string> > error_pages)
 {
     this->_error_pages = error_pages;
 }
 
-void Server::setRoot(std::string root)
-{
-    this->_root = root;
-}
-
-std::string &Server::getRoot()
-{
-    return this->_root;
-}
-
-std::vector<std::string> &Server::getIndex()
-{
-    return this->_index;
-}
-
-void Server::setIndex(std::vector<std::string> index)
-{
-    this->_index = index;
-}
-
-Cgi & Server::get_cgi()
+std::vector< Cgi > & Location::get_cgi()
 {
     return this->_cgi;
+}
+
+Location &Server::getDefaultLocation()
+{
+    return this->l_default;
+}
+
+void Server::setDefaultLocation(Location &defautLocation)
+{
+    this->l_default = defautLocation;
+}
+
+Location &Location::operator=(Location const &rhs)
+{
+    if (this != &rhs)
+    {
+        this->_locationNumber = rhs._locationNumber;
+        this->_locationPath = rhs._locationPath;
+        this->_clientMaxBodySize = rhs._clientMaxBodySize;
+        this->_error_pages = rhs._error_pages;
+        this->_cgi = rhs._cgi;
+        this->_root = rhs._root;
+        this->_index = rhs._index;
+        this->_autoIndex = rhs._autoIndex;
+        this->_allowedMethods = rhs._allowedMethods;
+        this->_uploadPath = rhs._uploadPath;
+        this->_redirection = rhs._redirection;
+    }
+    return *this;
 }

@@ -3,9 +3,10 @@
 #include "../includes/server.hpp"
 #define CRLF "\r\n"
 
-Response::Response() : _offset(0), fd(0), is_open(0), _content_type(""), file(""), _resp(std::make_pair("", 0)), _status_code(0) {
+Response::Response() : _content_type(""), _status_code(0), fd(0), file(""), is_open(0), _resp(std::make_pair("", 0)), _offset(0) {
     mime_types = mime_types_init();
     initErrorMessages();
+    headers.clear();
 }
 
 Response::~Response() {
@@ -40,6 +41,9 @@ Response & Response::operator=(const Response &resp)
     this->_resp = resp._resp;
     this->mime_types = resp.mime_types;
     this->_content_type = resp._content_type;
+    this->_status_code = resp._status_code;
+    this->headers = resp.headers;
+    this->errorMessages = resp.errorMessages;
     return *this;
 }
 
@@ -52,6 +56,7 @@ void Response::clear()
     this->_resp = std::make_pair("", 0);
     this->_content_type = "";
     this->_status_code = 0;
+    this->headers.clear();
 }
 
 size_t last_char_pos(std::string str, std::string str2)
@@ -70,6 +75,8 @@ size_t last_char_pos(std::string str, std::string str2)
 
 Response::Response(Request & req, Server & server)
 {
+    (void)server;
+    (void)req;
 }
 
 u_long Response::getOffset()
@@ -135,9 +142,11 @@ void Response::setResp(const std::pair<std::string, u_long> &resp)
 std::map<std::string, std::string>    Response::mime_types_init()
 {
     std::map<std::string, std::string> mimeTypes;
-    std::ifstream file("./tools/mime.types");
+    std::ifstream file;
     std::string line;
-    while (std::getline(file, line)) 
+
+    file.open("./tools/mime.types");
+    while (std::getline(file, line))
     {
         std::istringstream iss(line);
         std::string extension;
@@ -146,6 +155,7 @@ std::map<std::string, std::string>    Response::mime_types_init()
         if (iss >> contentType >> a >> extension)
             mimeTypes[extension] = contentType;
     }
+    file.close();
     return mimeTypes;
 }
 
@@ -163,19 +173,18 @@ bool file_exists (const char *filename) {
 
 void    Response::auto_indexing(const char *dir)
 {
-    std::string resp = "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length:";
-    std::string str = "<html><head><title>Index of /</title></head><body><h1>Index of /</h1><hr><pre>";
+    std::string str("<html><head><title>Index of /</title></head><body><h1>Index of /</h1><hr><pre>");
     DIR *dp;
     struct dirent *dirp;
 
+    setHeader("Status", "200 OK");
+    setHeader("Content-Type", "text/html");
     if ((dp = opendir(dir)) == NULL)
     {
         str += "</pre><hr></body></html>";
-        resp += std::to_string(str.length());
-        resp += "\n\n";
-        resp += str;
-        _resp.first = resp;
-        _resp.second = resp.length();
+        setHeader("Content-Length", std::to_string(str.length()));
+        _resp.first = str;
+        _resp.second = str.length();
         return ;
     }
     while ((dirp = readdir(dp)) != NULL)
@@ -187,289 +196,122 @@ void    Response::auto_indexing(const char *dir)
         str += "</a>\n";
     }
     str += "</pre><hr></body></html>";
-    resp += std::to_string(str.length());
-    resp += "\n\n";
-    resp += str;
-    _resp.first = resp;
-    _resp.second = resp.length();
+    setHeader("Content-Length", std::to_string(str.length()));
+    _resp.first = str;
+    _resp.second = str.length();
 }
 
-void Response::HandleGet(Request &req, Location &loc, Server &server)
+void Response::HandleGet(Request &req, Location &loc)
 {
     std::map<std::string, std::string> mimeTypes = mime_types_init();
     std::string request_resource = loc.getRoot() + req.getPath() + req.getFile();
     std::string contentType = getContentType(request_resource, mimeTypes);
     std::vector<std::string>::iterator it;
-
-    // _resp.first = "HTTP/1.1 200 OK\nContent-Type: ";
-    // _resp.first += contentType;
-    
-    // kan hadchi on
-    
-    // setHeader("Status", "200 OK");
-    // setHeader("Content-Type", contentType);
-
-
     std::ifstream file;
-    if (!file_exists(request_resource.c_str()))
-    {
-        generateErrorPage(404);
+
+    if (!file_exists(request_resource.c_str())) {
+        generateErrorPage(404, loc);
         return ;
     }
-    if (isDirectory(request_resource.c_str()))
-    {
-        // check if request_resource has / at the end
+    if (isDirectory(request_resource.c_str())) {
         if (request_resource[request_resource.length() - 1] != '/')
         {
-            // should update the page header to redirect to the same page with / at the end
-            generateErrorPage(301);
+            generateErrorPage(301, loc);
             setHeader("Location", req.getPath() + req.getFile() + "/");
             return ;
         }
-        // check if request_resource has index file
-        for (it = loc.getIndex().begin(); it != loc.getIndex().end(); it++)
-        {
-            //  /Users/hlachkar/www/pos/index.html
-            if (file_exists((request_resource + *it).c_str()))
-            {
+        for (it = loc.getIndex().begin(); it != loc.getIndex().end(); it++) {
+            if (file_exists((request_resource + *it).c_str())) {
+                req.setFile(*it);
                 request_resource += *it;
                 break;
             }
         }
-        if (it == loc.getIndex().end())
-        {
-            if (loc.getAutoIndex())
-            {
+        if (it == loc.getIndex().end()) {
+            if (loc.getAutoIndex()) {
                 auto_indexing(request_resource.c_str());
                 return ;
-            }
-            else
-            {
-                generateErrorPage(404);
+            } else {
+                generateErrorPage(404, loc);
                 return ;
             }
         }
     }
-    setHeader("Status", "200 OK");
-    setHeader("Content-Type", contentType);
-    file.open(request_resource, std::ios::binary | std::ios::ate);
-    setHeader("Content-Length", std::to_string(file.tellg()));
-    setHeader("Connection", "Keep-Alive");
-    this->file = request_resource;
-}
-
-void Response::HandlePost(Request &req, Location &loc, Server &server)
-{
-    // if location support upload
-    if (loc.getClientMaxBodySize() < req.getBody().size())
-    {
-        generateErrorPage(413);
+    if (access(request_resource.c_str(), R_OK) == -1) {
+        generateErrorPage(403, loc);
         return ;
     }
-    std::string request_resource = loc.getRoot() + req.getPath() + req.getFile();
+    std::string ext("");
+    std::string ext1("");
 
-    server.get_cgi().initEnv(req, "localhost", loc.getRoot());
-
-    int fdtmp = dup(0);
-
-
-    // open a tmp file and put req.getBody() in it
-
-
-    int fdin[2];
-    int fdout[2];
-    pipe(fdin);
-    pipe(fdout);
-
-    pid_t child_pid = fork();
-    if (child_pid < 0) {
-        exit(1);
+    if (!loc.get_cgi().empty()) {
+        ext = (loc.get_cgi()[0].get_Cgi().second);
+        if (loc.get_cgi().size() > 1)
+            ext1 = (loc.get_cgi()[1].get_Cgi().second);
     }
-
-    if (child_pid == 0) {
-        // Redirect the child process's STDOUT to write into the input pipe
-        dup2(fdout[1], STDOUT_FILENO);
-
-        // Redirect the child process's STDIN to read from the output pipe
-        dup2(fdin[0], STDIN_FILENO);
-
-        // Close unused pipe ends
-        close(fdout[0]);
-        close(fdin[1]);
-
-        char *av[3];
-        av[0] = strdup(server.get_cgi().get_Cgi().first.c_str());
-        av[1] = strdup(request_resource.c_str());
-        av[2] = NULL;
-
-        execve(av[0], av, server.get_cgi().getEnv());
-
-        exit(0);
-    }
-
-    // Close unused pipe ends
-    close(fdout[1]);
-    close(fdin[0]);
-
-    // Write the POST body to the input pipe
+    std::string reqext("");
+    if (req.getFile().find_last_of(".") != std::string::npos)
+        reqext = req.getFile().substr(req.getFile().find_last_of("."));
     
-    int rc = write(fdin[1], req.getBody().data(), req.getBody().size());
-    if (rc != req.getBody().size()) {
-        perror("error write: ");
-        exit(1);
-    }
 
-    // Close the input pipe write end to indicate end of data
-    close(fdin[1]);
-
-    /* Read from the pipe and set resp */
-    const int BUFFER_SIZE = 4096;
-    char buffer[BUFFER_SIZE];
-    std::stringstream output;
-    ssize_t bytesRead;
-    while ((bytesRead = read(fdout[0], buffer, BUFFER_SIZE)) > 0)
-    {
-        output.write(buffer, bytesRead);
-    }
-    close (fdout[0]);
-    wait (NULL);
-    dup2(fdtmp, 0);
-    
-    // _resp.first = "HTTP/1.1 200 OK" CRLF "Connection: close" CRLF
-    // "Content-Type: text/html; charset=UTF-8" CRLF;    
-
-    setHeader("Status", "200 OK");
-    setHeader("Content-Type", "text/html; charset=UTF-8");
-    setHeader("Connection", "close");
-    setHeader("Content-Length", std::to_string(output.str().length()));
-
-    // std::cout << "output: " << output.str() << std::endl;
-
-    // _resp.first += "Content-Length: " + std::to_string(output.str().length()) + CRLF CRLF;
-
-    _resp.first += output.str();
-    _resp.second = _resp.first.length();
-
-    // std::vector<std::string>::iterator it;
-    // if (isDirectory(request_resource.c_str()))
-    // {
-    //     if (request_resource[request_resource.length() - 1] != '/')
-    //     {
-    //         _resp.first = "HTTP/1.1 301 Moved Permanently\nLocation: " + req.getPath() + req.getFile() + "/\nContent-Type: text/html\nContent-Length: 13\n\n301 moved permanently";
-    //         _resp.second = 84;
-    //         return ;
-    //     }
-    //     for (it = loc.getIndex().begin(); it != loc.getIndex().end(); it++)
-    //     {
-    //         if (file_exists((request_resource + *it).c_str()))
-    //         {
-    //             if (!server.get_cgi().OK())
-    //             {
-    //                  // run_cgi();
-    //                  return ;
-    //             }
-    //             else
-    //             {
-    //                 _resp.first = "HTTP/1.1 403 Forbidden\nContent-Type: text/html\nContent-Length: 13\n\n403 forbidden";
-    //                 _resp.second = 84;
-    //                 return ;
-    //             }
-    //         }
-    //     }
-    //      _resp.first = "HTTP/1.1 403 Forbidden\nContent-Type: text/html\nContent-Length: 13\n\n403 forbidden";
-    //     _resp.second = 84;
-    //     return ;
-    // }
-    return ;
-}
-
-void Response::HandleDelete(Request &req, Location &loc, Server &Server)
-{
-    std::string request_resource = loc.getRoot() + req.getPath() + req.getFile();
-    if (!file_exists(request_resource.c_str()))
-    {
-        generateErrorPage(404);
+    if (loc.get_cgi().empty() || ((ext == "" || ext != reqext) && (ext1 == "" || ext1 != reqext))){
+        setHeader("Status", "200 OK");
+        setStatusCode(200);
+        setHeader("Content-Type", contentType);
+        file.open(request_resource, std::ios::binary | std::ios::ate);
+        setHeader("Content-Length", std::to_string(file.tellg()));
+        if (req.getHeaders().find("Cookie") == req.getHeaders().end())
+            setHeader("Set-Cookie", "lala=pepe; Path=/");
+        file.close();
+        this->file = request_resource;
         return ;
+
     }
-    if (isDirectory(request_resource.c_str()))
-    {
-        if (request_resource[request_resource.length() - 1] != '/')
-        {
-            generateErrorPage(409);
+    else if (ext == reqext) {
+        if (loc.get_cgi()[0].OK()) {
+            loc.get_cgi()[0].runCgi(req, loc, *this);
             return ;
         }
-        if(Server.get_cgi().OK())
-        {
-            if(!remove(request_resource.c_str()))
-            {
-                generateErrorPage(204);
-                return ;
-            }
-            else
-            {
-                if(access(request_resource.c_str(), W_OK))
+    } else if (ext1 == reqext) {
+        if (loc.get_cgi()[1].OK()) {
+            loc.get_cgi()[1].runCgi(req, loc, *this);
+            return ;
+        }
+    }
+    generateErrorPage(503, loc);
+    // check cgi
+}
+
+void Response::generateErrorPage(int code, Location const &loc)
+{
+    // loc.print_location();
+    std::map<int, std::string>::iterator it = errorMessages.find(code);
+    if (it != errorMessages.end()) {
+        std::string errorMessage = it->second;
+        if (!loc.getError_pages().empty()) {
+            size_t pos = 0;
+                for (; pos < loc.getError_pages().size(); pos++)
                 {
-                    generateErrorPage(403);
-                    return ;
+                    if (loc.getError_pages()[pos].first == code)
+                        break;
                 }
-                else
-                {
-                    generateErrorPage(500);
+            if (pos != loc.getError_pages().size()) {
+                std::ifstream file;
+                file.open(loc.getError_pages()[pos].second);
+                if (file.is_open()) {
+                    std::stringstream buffer;
+                    buffer << file.rdbuf();
+                    std::string str = buffer.str();
+                    this->setHeader("Content-Length", std::to_string(str.length()));
+                    this->setHeader("Status", std::to_string(code) + " " + errorMessage);
+                    this->setHeader("Content-Type", "text/html");
+                    _resp.first = str;
+                    _resp.second = str.length();
+                    file.close();
                     return ;
                 }
             }
         }
-    }
-    else
-    {
-       if(Server.get_cgi().OK())
-       {
-            if(!remove(request_resource.c_str()))
-            {
-                generateErrorPage(204);
-                return ;
-            }
-            else
-            {
-                generateErrorPage(500);
-                return ;
-            }
-       }
-    }
-}
-
-std::string  Response::getContentType(const std::string& file , std::map<std::string, std::string>& mime_t)
-{
-    size_t dotPos = file.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        std::string extension = file.substr(dotPos + 1);
-        std::map<std::string, std::string>::iterator it = mime_t.find(extension);
-        if (it != mime_t.end())
-            return it->second;
-        else
-            return "octet-stream";
-    }
-    if (file == "")
-        return "text/html";
-    return "text/html";
-}
-
-std::string Response::toString() const {
-    std::ostringstream oss;
-    oss << "HTTP/1.1 " << headers.at("Status") << "\r\n";
-    for (const auto& pair : headers) {
-        oss << pair.first << ": " << pair.second << "\r\n";
-    }
-    oss << "\r\n";
-    oss << _resp.first;
-    return oss.str();
-}
-
-void Response::generateErrorPage(int code)
-{
-    auto it = errorMessages.find(code);
-    if (it != errorMessages.end()) {
-        std::string errorMessage = it->second;
         std::string errorPage = "<!DOCTYPE html>\n";
         errorPage += "<html>\n";
         errorPage += "<head>\n";
@@ -493,6 +335,7 @@ void Response::generateErrorPage(int code)
         _resp.second = errorPage.length();
     }
     else {
+        std::cout << "haadd zbya: " << code << std::endl;
         this->setHeader ("Status", "500 Internal Server Error");
         this->setHeader ("Content-Type", "text/html");
         _resp.first = "<!DOCTYPE html>\n";
@@ -502,6 +345,232 @@ void Response::generateErrorPage(int code)
         this->setHeader("Content-Length", std::to_string(_resp.first.length()));
         _resp.second = _resp.first.length();
     }
+}
+
+std::vector<Location>::iterator   Response::match_loc(Server & server, std::string const & path)
+{
+    std::vector<Location>::iterator it = server.getLocations().begin();
+    std::vector<Location>::iterator ite = server.getLocations().end();
+
+    while (it != server.getLocations().end()) {
+        if (path.find(it->getLocationPath()) != std::string::npos) {
+            if (it->getLocationPath() == "/") {
+                ite = it;
+                it++;
+                continue ;
+            } else
+                break ;
+        }
+        it++;
+    }
+    if (it == server.getLocations().end() && ite == server.getLocations().end()) {
+        if (server.getDefaultLocation().getRoot() != "") {
+            return it;
+        }
+        else
+            this->generateErrorPage(404, Location(-1));
+        return it;
+    } else if (it == server.getLocations().end() && ite != server.getLocations().end())
+        it = ite;
+    return it;
+}
+
+ 
+int	Response::write_file_in_path(Location &client, std::vector<unsigned char> content, std::string path)
+{
+	size_t index = path.find_last_of("/");
+	std::string file_name = path.substr(index + 1);
+	std::string folder_path = path.substr(0, index);
+
+	std::string command = "mkdir -p " + folder_path;
+	system(command.c_str());
+	int write_fd = open(path.c_str(), O_WRONLY | O_TRUNC | O_CREAT, 0644);
+	if (write_fd < 0)
+	{
+	    close(write_fd);
+		generateErrorPage(500, client);
+		return -1;
+	}
+    
+    char *buf = new char[content.size() + 1];
+    for (size_t i = 0; i < content.size(); i++)
+        buf[i] = content[i];
+
+	int r = write(write_fd, buf, content.size());
+	delete [] buf;
+    if (r < 0)
+	{	
+		generateErrorPage(500, client);
+		close(write_fd);
+		return -1;
+	}
+	close(write_fd);
+	return 0;
+}
+
+void Response::HandlePost(Request &req, Location &loc)
+{
+    std::vector<std::string>::iterator it;
+    std::string request_resource = loc.getRoot() + req.getPath() + req.getFile();
+
+    if (isDirectory(request_resource.c_str())) {
+            if (request_resource[request_resource.length() - 1] != '/')
+                request_resource += "/";
+            if(!loc.getIndex().empty()){
+                req.setFile(loc.getIndex()[0]);
+                request_resource += req.getFile();
+            }
+            else
+            {
+                generateErrorPage(403, loc);
+                return ;
+            }
+    }
+    std::string ext("");
+    std::string ext1("");
+
+    if (!loc.get_cgi().empty()) {
+        ext = (loc.get_cgi()[0].get_Cgi().second);
+        if (loc.get_cgi().size() > 1)
+            ext1 = (loc.get_cgi()[1].get_Cgi().second);
+    }
+    std::string reqext("");
+    if (req.getFile().find_last_of(".") != std::string::npos)
+        reqext = req.getFile().substr(req.getFile().find_last_of("."));
+    
+
+    if (loc.getUploadPath() && (loc.get_cgi().empty() || ((ext == "" || ext != reqext) && (ext1 == "" || ext1 != reqext)))) {
+        if (loc.getClientMaxBodySize() < req.getBody().size()) {
+            generateErrorPage(413, loc);
+            return ;
+        }
+        std::cout << "HHAHAHAHAHHA" << std::endl;
+        this->write_file_in_path(loc, req.getBody(), request_resource);
+        setHeader("Status", "201 Created");
+        setHeader("Content-Type", "text/html");
+        _resp.first = "<!DOCTYPE html>\n";
+        _resp.first += "<html>\n";
+        _resp.first += "<head>\n";
+        _resp.first += "<title>Created</title>\n";
+        _resp.first += "</head>\n";
+        _resp.first += "<body>\n";
+        _resp.first += "<h1>Created</h1>\n";
+        _resp.first += "</body>\n";
+        _resp.first += "</html>\n";
+        setHeader("Content-Length", std::to_string(_resp.first.length()));
+        _resp.second = _resp.first.length();
+        return ;
+    }
+
+    else if (req.getFile().find(ext) + ext.length() == req.getFile().size()) {
+        if (loc.get_cgi()[0].OK()) {
+            loc.get_cgi()[0].runCgi(req, loc, *this);
+            return ;
+        }
+    } else if (req.getFile().find(ext1) + ext1.length() == req.getFile().size()) {
+        if (loc.get_cgi()[1].OK()) {
+            loc.get_cgi()[1].runCgi(req, loc, *this);
+            return ;
+        }
+    }
+    generateErrorPage(503, loc);
+}
+
+int Response::deleteDirectory(const char *path) {
+    struct dirent *entry;
+    DIR *dir = opendir(path);
+
+    if (dir == NULL) {
+        return -1;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char filePath[PATH_MAX];
+        snprintf(filePath, PATH_MAX, "%s/%s", path, entry->d_name);
+
+        struct stat st;
+        if (lstat(filePath, &st) == -1) {
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (deleteDirectory(filePath) == -1) {
+                continue;
+            }
+        } else {
+            if (unlink(filePath) == -1) {
+                continue;
+            }
+        }
+    }
+    closedir(dir);
+    if (rmdir(path) == -1) {
+        return -1;
+    }
+
+    return 0;
+}
+
+void Response::HandleDelete(Request &req, Location &loc)
+{
+    std::string request_resource = loc.getRoot() + req.getPath() + req.getFile();
+    if (!file_exists(request_resource.c_str())) {
+        generateErrorPage(404, loc);
+    }
+    else if (isDirectory(request_resource.c_str())) {
+        if (request_resource[request_resource.length() - 1] != '/') {
+               generateErrorPage(409, loc);
+        }
+        else {
+            if(!deleteDirectory(request_resource.c_str())) {
+                generateErrorPage(204, loc);
+            } else {
+                if(access(request_resource.c_str(), W_OK)) {
+                    generateErrorPage(403, loc);
+                }
+                else {
+                    generateErrorPage(500, loc);
+                }
+            }
+        }
+    }
+    else {
+        if(!remove(request_resource.c_str())) {
+            generateErrorPage(204, loc);
+        } else {
+            generateErrorPage(500, loc);
+        }
+    }
+}
+
+std::string  Response::getContentType(const std::string& file , std::map<std::string, std::string>& mime_t)
+{
+    size_t dotPos = file.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        std::string extension = file.substr(dotPos + 1);
+        std::map<std::string, std::string>::iterator it = mime_t.find(extension);
+        if (it != mime_t.end())
+            return it->second;
+        else
+            return "octet-stream";
+    }
+    if (file == "")
+        return "text/html";
+    return "text/html";
+}
+
+std::string Response::toString() const {
+    std::ostringstream oss;
+    oss << "HTTP/1.1 " << headers.at("Status") << "\r\n";
+    for (std::map<std::string, std::string>::const_iterator it = headers.begin(); it != headers.end(); ++it)
+        oss << it->first << ": " << it->second << "\r\n";
+    oss << "\r\n";
+    oss << _resp.first;
+    return oss.str();
 }
 
 void Response::initErrorMessages()
@@ -515,6 +584,7 @@ void Response::initErrorMessages()
     errorMessages[404] = "Not Found";
     errorMessages[403] = "Forbidden";
     errorMessages[301] = "Moved Permanently";
+    errorMessages[302] = "Found";
     errorMessages[204] = "No Content";
     errorMessages[201] = "Created";
     errorMessages[200] = "OK";
@@ -522,66 +592,48 @@ void Response::initErrorMessages()
     errorMessages[413] = "Payload Too Large";
     errorMessages[409] = "Conflict";
     errorMessages[408] = "Request Timeout";
+    errorMessages[512] = "Bad Gateway";
+    errorMessages[503] = "Service Unavailable";
 }
 
 void  Response::prepare_response(Request & req, Server & server)
 {
-    std::vector<Location>::iterator it = server.getLocations().begin();
-    std::vector<Location>::iterator ite = server.getLocations().end();
 
-    if (_status_code != 0)
+    std::vector<Location>::iterator it = this->match_loc(server, req.getPath());
+    Location loc;
+    
+    if (it == server.getLocations().end())
     {
-        std::cout << "generate error page " << _status_code << std::endl;
-        generateErrorPage(_status_code);
-        return ;
-    }
-
-    while (it != server.getLocations().end())
-    {
-        if (req.getPath().find(it->getLocationPath()) != std::string::npos)
-        {
-            if (it->getLocationPath() == "/")
-            {
-                ite = it;
-                it++;
-                continue ;
-            }
-            else
-                break ;
+        if (server.getDefaultLocation().getRoot() != "") {
+            loc = server.getDefaultLocation();
+        } else {
+            generateErrorPage(403, *it);
+            return ;
         }
-        it++;
     }
-    if (it == server.getLocations().end() && ite == server.getLocations().end())
-    {
-        generateErrorPage(404);
+
+    else
+        loc = *it;
+    if (_status_code != 0) {
+        generateErrorPage(_status_code, loc);
         return ;
     }
-    else if (it == server.getLocations().end() && ite != server.getLocations().end())
-        it = ite;
-    if (it->getRedirection().first != "")
-    {
-        std::cout << "redirection" << std::endl;
-        generateErrorPage(301);
-        setHeader("Location", it->getRedirection().first);
+    if (loc.getRedirection().first != "") {
+        generateErrorPage(std::stoi(loc.getRedirection().first), loc);
+        setHeader("Location", loc.getRedirection().second);
         return ;
     }
-    if (std::find(it->getAllowedMethods().begin(), it->getAllowedMethods().end(), req.getMethod()) == it->getAllowedMethods().end())
-    {
-        std::cout << "not allowed" << std::endl;
-        generateErrorPage(405);
+    if (std::find(loc.getAllowedMethods().begin(), loc.getAllowedMethods().end(), req.getMethod()) == loc.getAllowedMethods().end()) {
+        generateErrorPage(405, loc);
         return ;
     }
-    if (req.getMethod() == "GET")
-    {
-        HandleGet(req, *it, server);
-    }
-    else if (req.getMethod() == "POST")
-    {
-        HandlePost(req, *it, server);
-    }
-    else if (req.getMethod() == "DELETE")
-    {
-        HandleDelete(req, *it, server);
+    if (req.getMethod() == "GET") {
+        std::cout << "GET" << std::endl;
+        HandleGet(req, loc);
+    } else if (req.getMethod() == "POST") {
+        HandlePost(req, loc);
+    } else if (req.getMethod() == "DELETE") {
+        HandleDelete(req, loc);
     }
 }
 

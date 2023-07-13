@@ -23,6 +23,9 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 
+class Server;
+class Socket;
+
 class Request {
     
     private:
@@ -46,7 +49,7 @@ class Request {
     public:
         Request();
         Request(const Request &request);
-        Request(std::vector<unsigned char> request);
+        Request(std::pair <Socket, Server> & client, std::vector<Server>& servers);
         ~Request();
         Request &operator=(const Request &request);
         time_t getStarted();
@@ -57,6 +60,7 @@ class Request {
         std::string getHost();
         std::string getQuery() const;
         std::string getFile() const;
+        void setFile(std::string file);
         time_t      getTimeOut();
         bool        getConn();
         void        clear();
